@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import os
 import pandas as pd
 from pandas_schema import Column, Schema
@@ -15,10 +16,14 @@ filename = 'training.csv'
 
 df = pd.read_csv(os.path.join(DATADIR, filename))
 
-### VALIDATION ###
+"""
+--- VALIDATION ---
+
+Check that data input is consistent with downstream dataframe treatments. Reason: GIGO
+"""
 schema = Schema([
     Column('geohash6', [MatchesPatternValidation(r'[a-z0-9]{6}')]),
-    Column('day', [IsDtypeValidation(np.int64)]),
+    Column('day', [IsDtypeValidation(np.int64), InRangeValidation(min=1)]),
     Column('timestamp', [InListValidation(['20:0', '14:30', '6:15', '5:0', '4:0', '12:15', '3:30', '20:45',
        '22:15', '9:15', '11:45', '14:45', '2:30', '23:45', '11:30',
        '10:0', '11:0', '18:30', '6:0', '13:0', '4:30', '15:30', '4:15',
@@ -40,4 +45,29 @@ schema = Schema([
 errors = schema.validate(df)
 if errors:
     warnings.warn("Data loaded with some inconsistencies. Resulting dataframe may not be accurate.")
+
+
+"""
+--- DATETIME ---
+
+Given that this is a time-series dataset, it is more convenient to work with datetime objects.
+This section is aimed at creating corresponding datetime objects from the day and timestamp scalar values.
+An arbritary calendar day 1-1-1900 will be selected as the base date. This can be updated later on if necessary
+"""
+BASEDATE = datetime(1900, 1, 1)
+
+def hrmin_scalar2delta(strseries):
+    for ts in strseries:
+        x, y = ts.split(':')
+        yield timedelta(hours=int(x), minutes=int(y))
+
+# Timedelta at hour and minute precision
+hrmin_delta = []
+hrmin_delta.extend(hrmin_scalar2delta(df.timestamp))
+# Timedelta at day precision. -1 for 1900-01-01
+day_delta = [timedelta(days=x-1) for x in df.day]
+# Timedelta combined
+time_delta = [x + y for x, y in zip(day_delta, hrmin_delta)]
+# Create the datetime column
+df['reftime'] = [BASEDATE + x for x in time_delta]
 
