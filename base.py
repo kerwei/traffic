@@ -169,4 +169,9 @@ qp03mf_quart['rdemand'] = [str(round(x, 2)) for x in qp03mf_quart.demand]
 # Split into training and testing sets
 df_train = qp03mf_quart.loc[qp03mf_quart.day <= 48, ['label', 'rdemand']]
 df_test = qp03mf_quart.loc[qp03mf_quart.day > 48, ['label', 'rdemand']]
+
+tags = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['label']]
+words = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['rdemand']]
+emmission_count = pair_counts(tags, words)
+
 pdb.set_trace()
