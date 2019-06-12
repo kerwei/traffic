@@ -138,12 +138,13 @@ qp03mf_quart['time_rank'] = qp03mf_quart.timex.rank(method='dense')
 qp03mf_quart['label'] = [''.join(['T', str(x), y]) for x, y in zip(qp03mf_quart.time_rank, qp03mf_quart.dmd_label)]
 qp03mf_quart.drop(['dmd_label', 'timex', 'time_rank'], axis=1, inplace=True)
 qp03mf_quart['rdemand'] = [str(round(x, 2)) for x in qp03mf_quart.demand]
+qp03mf_quart['forward_label'] = qp03mf_quart.label.shift(-1)
 
+# pdb.set_trace()
 # Split into training and testing sets
 demand_label = list(qp03mf_quart.label.unique())
-df_train = qp03mf_quart.loc[qp03mf_quart.day <= 48, ['label', 'rdemand']]
-df_test = qp03mf_quart.loc[qp03mf_quart.day > 48, ['label', 'rdemand']]
-
+df_train = qp03mf_quart.loc[qp03mf_quart.day <= 48, ['label', 'rdemand', 'forward_label']]
+df_test = qp03mf_quart.loc[qp03mf_quart.day > 48, ['label', 'rdemand', 'forward_label']]
 
 """
 --- HMM TAGGER ---
@@ -190,7 +191,7 @@ def ending_counts(sequence):
     """
     return Counter(sequence)
 
-
+# rdemand
 tag_unigrams = unigram_counts(df_train.rdemand)
 tag_bigrams = bigram_counts(df_train.rdemand)
 
@@ -236,6 +237,46 @@ for key, value in tag_bigrams.items():
 # Finalize the model
 basic_model.bake()
 
+# forward labels
+forlabel_unigrams = unigram_counts(df_train.forward_label)
+forlabel_bigrams = bigram_counts(df_train.forward_label)
+
+all_labels = [str(x) for x in df_train.forward_label.unique()]
+forlabel_starts = starting_counts(all_labels)
+forlabel_ends = ending_counts(all_labels)
+
+label_model = HiddenMarkovModel(name="label-hmm-tagger")
+
+forlabel_train = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['forward_label']]
+emission_count = pair_counts(forlabel_train, label_train[:-1])
+label_states = []
+
+for forlabel, label_dict in emission_count.items() :
+    dist_label = DiscreteDistribution({label: cn/forlabel_unigrams[forlabel] for label, cn in label_dict.items()})
+    label_states.append(State(dist_label, name=forlabel))
+
+label_model.add_states(label_states)
+labelstate_names = [s.name for s in label_states]
+labelstate_index = {tag:num for num, tag in enumerate(labelstate_names)}
+
+# Start transition
+total_label_start = sum(forlabel_starts.values())
+for forlabel, cn in forlabel_starts.items():
+    sname = labelstate_index[forlabel]
+    label_model.add_transition(label_model.start, label_states[labelstate_index[forlabel]], cn/total_label_start)
+
+# End transition
+total_label_end = sum(forlabel_ends.values())
+for forlabel, cn in forlabel_ends.items():
+    label_model.add_transition(label_states[labelstate_index[forlabel]], label_model.end, cn/total_label_end)
+
+# Edges between states for the observed transition frequencies P(tag_i | tag_i-1)
+for key, value in forlabel_bigrams.items():
+    label_model.add_transition(label_states[labelstate_index[key[0]]], label_states[labelstate_index[key[1]]], value/forlabel_unigrams[key[0]])
+
+# Finalize the model
+label_model.bake()
+
 
 if __name__ == '__main__':
     # Testing set
@@ -249,3 +290,14 @@ if __name__ == '__main__':
     print("Actual labels:\n--------------")
     print(actual)
     print("\n")
+
+    # Testing set
+    actual = df_test.loc[(df_test.index.day == 1) & (time(9, 0, 0) < df_test.index.time) & (df_test.index.time < time(12, 0, 0)), 'label']
+
+    print("Sentence Key: {}\n".format(test))
+    print("Predicted labels:\n-----------------")
+    print(simplify_decoding(test, label_model, demand_label))
+    print()
+    print("Actual labels:\n--------------")
+    print(actual)
+    print("\n")        
