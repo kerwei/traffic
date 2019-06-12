@@ -1,5 +1,6 @@
 from collections import Counter
-from datetime import datetime, timedelta
+from copy import copy
+from datetime import datetime, timedelta, time
 import geohash2
 from itertools import chain
 import matplotlib.pyplot as plt
@@ -8,7 +9,7 @@ import os
 import pandas as pd
 from pandas_schema import Column, Schema
 from pandas_schema.validation import InRangeValidation, MatchesPatternValidation, IsDtypeValidation, InListValidation
-import pomegranate
+from pomegranate import State, HiddenMarkovModel, DiscreteDistribution
 import warnings
 
 import pdb
@@ -87,6 +88,20 @@ def pair_counts(sequences_A, sequences_B):
     return res_dct
 
 
+def replace_unknown(sequence, demand_label):
+    """Return a copy of the input sequence where each unknown word is replaced
+    by the literal string value 'nan'. Pomegranate will ignore these values
+    during computation.
+    """
+    return [w if w in demand_label else 'nan' for w in sequence]
+
+
+def simplify_decoding(X, model, demand_label):
+    """X should be a 1-D sequence of observations for the model to predict"""
+    _, state_path = model.viterbi(replace_unknown(X, demand_label))
+    return [state[1].name for state in state_path[1:-1]]  # do not show the start/end state predictions
+
+
 # Timedelta at hour and minute precision
 hrmin_delta = []
 hrmin_delta.extend(hrmin_scalar2delta(df.timestamp))
@@ -97,48 +112,6 @@ time_delta = [x + y for x, y in zip(day_delta, hrmin_delta)]
 # Create the datetime column
 df['reftime'] = [BASEDATE + x for x in time_delta]
 
-
-"""
---- LATLONG ---
-Only using this for research. In reality, code can just work on the geohash values directly without converting them to latlong
-"""
-# uniqgeo = set(df.geohash6.unique())
-# geotbl = {x:geohash2.decode_exactly(x) for x in uniqgeo}
-# latlong = df.geohash6.map(geotbl)
-# latval = []
-# lngval = []
-
-# for lat, lng, errlat, errlng in latlong:
-#     latval.append(lat)
-#     lngval.append(lng)
-
-# df['lat'] = latval
-# df['lng'] = lngval
-
-
-"""
---- WEEKENDS AND PH ---
-
-Hypothesis: Weekends and PH have significantly different demand from a regular weekday. These should be isolated
-and analyzed as a separate time series
-"""
-# Try data aggregation at geohash4 to determine weekends. qp03 is used here
-# qp03 = df.loc[df.geohash6 == 'qp09d3']
-# qp03.set_index('reftime', inplace=True)
-# qp03_hour = qp03.groupby([qp03.index.dayofyear, qp03.index.hour])['demand'].mean()
-# qp03_plot = qp03_hour.unstack(level=0)
-
-# # Line plot
-# fig, ax = plt.subplots()
-# for idx in qp03_plot.columns[:15]:
-#     ax.plot(qp03_plot[idx])
-
-# plt.show()
-
-
-"""
---- MODEL ---
-"""
 
 """
 qp03mf
@@ -167,11 +140,112 @@ qp03mf_quart.drop(['dmd_label', 'timex', 'time_rank'], axis=1, inplace=True)
 qp03mf_quart['rdemand'] = [str(round(x, 2)) for x in qp03mf_quart.demand]
 
 # Split into training and testing sets
+demand_label = list(qp03mf_quart.label.unique())
 df_train = qp03mf_quart.loc[qp03mf_quart.day <= 48, ['label', 'rdemand']]
 df_test = qp03mf_quart.loc[qp03mf_quart.day > 48, ['label', 'rdemand']]
 
-tags = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['label']]
-words = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['rdemand']]
-emmission_count = pair_counts(tags, words)
 
-pdb.set_trace()
+"""
+--- HMM TAGGER ---
+"""
+def unigram_counts(sequence):
+    """Return a dictionary keyed to each unique value in the input sequence list that
+    counts the number of occurrences of the value in the sequences list. The sequences
+    collection should be a 2-dimensional array.
+    
+    For example, if the tag NOUN appears 275558 times over all the input sequences,
+    then you should return a dictionary such that your_unigram_counts[NOUN] == 275558.
+    """
+    return Counter(sequence)
+
+def bigram_counts(sequence):
+    """Return a dictionary keyed to each unique PAIR of values in the input sequences
+    list that counts the number of occurrences of pair in the sequences list. The input
+    should be a 2-dimensional array.
+    
+    For example, if the pair of tags (NOUN, VERB) appear 61582 times, then you should
+    return a dictionary such that your_bigram_counts[(NOUN, VERB)] == 61582
+    """
+    pairlst = list(zip(sequence[:-1], sequence[1:]))
+    
+    return Counter(pairlst)
+
+def starting_counts(sequence):
+    """Return a dictionary keyed to each unique value in the input sequences list
+    that counts the number of occurrences where that value is at the beginning of
+    a sequence.
+    
+    For example, if 8093 sequences start with NOUN, then you should return a
+    dictionary such that your_starting_counts[NOUN] == 8093
+    """
+    return Counter(sequence)
+
+def ending_counts(sequence):
+    """Return a dictionary keyed to each unique value in the input sequences list
+    that counts the number of occurrences where that value is at the end of
+    a sequence.
+    
+    For example, if 18 sequences end with DET, then you should return a
+    dictionary such that your_starting_counts[DET] == 18
+    """
+    return Counter(sequence)
+
+
+tag_unigrams = unigram_counts(df_train.rdemand)
+tag_bigrams = bigram_counts(df_train.rdemand)
+
+# Uniform distribution for starting and ending labels
+all_labels = [str(x) for x in df_train.rdemand.unique()]
+tag_starts = starting_counts(all_labels)
+tag_ends = ending_counts(all_labels)
+
+basic_model = HiddenMarkovModel(name="base-hmm-tagger")
+
+# Emission count
+label_train = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['label']]
+rdemand_train = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['rdemand']]
+emission_count = pair_counts(rdemand_train, label_train)
+
+# States with emission probability distributions P(word | tag)
+states = []
+for rdemand, label_dict in emission_count.items() :
+    dist_tag = DiscreteDistribution({label: cn/tag_unigrams[rdemand] for label, cn in label_dict.items()})
+    states.append(State(dist_tag, name=rdemand))
+
+basic_model.add_states(states)
+state_names = [s.name for s in states]
+state_index = {tag:num for num, tag in enumerate(state_names)}
+
+# Start transition
+total_start = sum(tag_starts.values())
+# pdb.set_trace()
+for tag, cn in tag_starts.items():
+    sname = state_index[tag]
+    basic_model.add_transition(basic_model.start, states[state_index[tag]], cn/total_start)
+
+# End transition
+total_end = sum(tag_ends.values())
+for tag, cn in tag_ends.items():
+    basic_model.add_transition(states[state_index[tag]], basic_model.end, cn/total_end)
+
+
+# Edges between states for the observed transition frequencies P(tag_i | tag_i-1)
+for key, value in tag_bigrams.items():
+    basic_model.add_transition(states[state_index[key[0]]], states[state_index[key[1]]], value/tag_unigrams[key[0]])
+
+# Finalize the model
+basic_model.bake()
+
+
+if __name__ == '__main__':
+    # Testing set
+    test = df_test.loc[(df_test.index.day == 1) & (time(9, 0, 0) < df_test.index.time) & (df_test.index.time < time(12, 0, 0)), 'label']
+    actual = df_test.loc[(df_test.index.day == 1) & (time(9, 0, 0) < df_test.index.time) & (df_test.index.time < time(12, 0, 0)), 'rdemand']
+
+    print("Sentence Key: {}\n".format(test))
+    print("Predicted labels:\n-----------------")
+    print(simplify_decoding(test, basic_model, demand_label))
+    print()
+    print("Actual labels:\n--------------")
+    print(actual)
+    print("\n")
