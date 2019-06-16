@@ -94,41 +94,49 @@ time_delta = [x + y for x, y in zip(day_delta, hrmin_delta)]
 # Create the datetime column
 df['reftime'] = [BASEDATE + x for x in time_delta]
 df.set_index('reftime', inplace=True)
-df = df.resample('15T').mean()
-df.demand.fillna(0, inplace=True)
-df['day'] = df.index.dayofyear
-df['dmd_label'] = [''.join(['D', str(x//0.1)]) for x in df.demand]
-df['dmd_label'] = ['H' if x >= df.demand.median() else 'L' for x in df.demand]
-df['timex'] = df.index.time
-df['time_rank'] = df.timex.rank(method='dense')
-df['label'] = [''.join(['T', str(x), y]) for x, y in zip(df.time_rank, df.dmd_label)]
-df.drop(['dmd_label', 'timex', 'time_rank'], axis=1, inplace=True)
-df['rdemand'] = [str(round(x, 2)) for x in df.demand]
-df['forward_label'] = df.label.shift(-1)
 
+def standardize_frame(frame):
+    frame = frame.resample('15T').mean()
+    frame.demand.fillna(0, inplace=True)
+    frame['day'] = frame.index.dayofyear
+    frame['dmd_label'] = [''.join(['D', str(x//0.1)]) for x in frame.demand]
+    frame['dmd_label'] = ['H' if x >= frame.demand.median() else 'L' for x in frame.demand]
+    frame['timex'] = frame.index.time
+    frame['time_rank'] = frame.timex.rank(method='dense')
+    frame['label'] = [''.join(['T', str(x), y]) for x, y in zip(frame.time_rank, frame.dmd_label)]
+    frame.drop(['dmd_label', 'timex', 'time_rank'], axis=1, inplace=True)
+    frame['rdemand'] = [str(round(x, 2)) for x in frame.demand]
+    frame['forward_label'] = frame.label.shift(-1)
 
-# Split into training and testing sets
-demand_label = list(df.label.unique())
-df_train = df.loc[df.day <= 48, ['label', 'rdemand', 'forward_label']]
-df_test = df.loc[df.day > 48, ['label', 'rdemand', 'forward_label']]
+    return frame
 
 
 if __name__ == '__main__':
-    # TODO: Set up a loop for multiple geohashes
-    # Right now I can't be sure of the result output
-    # Testing set
-    test = df_test.loc[(df_test.index.day == 1) & (time(9, 0, 0) < df_test.index.time) & (df_test.index.time < time(12, 0, 0)), 'label']
-    actual = df_test.loc[(df_test.index.day == 1) & (time(9, 0, 0) < df_test.index.time) & (df_test.index.time < time(12, 0, 0)), 'rdemand']
+    # Split into training and testing sets
+    for geo in geofilter:
+        df_geo = df.loc[df.geohash6 == geo]
+        df_geo = standardize_frame(df_geo)
+        demand_label = list(df_geo.label.unique())
+        test_split = (df_geo.day.max() // 5) * 4
+        pdb.set_trace()
+        df_train = df_geo.loc[df_geo.day <= test_split, ['label', 'rdemand', 'forward_label']]
+        df_test = df_geo.loc[df_geo.day > test_split, ['label', 'rdemand', 'forward_label']]
 
-    # Train the model
-    label_train = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['label']]
-    rdemand_train = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['rdemand']]
-    em_model = emission.bake_model(label_train, rdemand_train)
+        # Testing set
+        test = df_test.loc[(df_test.index.day == 1) & (time(9, 0, 0) < df_test.index.time) & (df_test.index.time < time(12, 0, 0)), 'label']
+        actual = df_test.loc[(df_test.index.day == 1) & (time(9, 0, 0) < df_test.index.time) & (df_test.index.time < time(12, 0, 0)), 'rdemand']
 
-    print("Sentence Key: {}\n".format(test))
-    print("Predicted labels:\n-----------------")
-    print(utils.simplify_decoding(test, em_model, demand_label))
-    print()
-    print("Actual labels:\n--------------")
-    print(actual)
-    print("\n")
+        # Train the model
+        label_train = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['label']]
+        rdemand_train = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['rdemand']]
+        em_model = emission.bake_model(label_train, rdemand_train)
+
+        print("Geohash: {}\n".format(geo))
+        print("Actual label:\n--------------")
+        print(test)
+        print("Predicted demand:\n-----------------")
+        print(utils.simplify_decoding(test, em_model, demand_label))
+        print()
+        print("Actual demand:\n--------------")
+        print(actual)
+        print("\n")
