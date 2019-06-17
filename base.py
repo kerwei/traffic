@@ -72,7 +72,9 @@ def hrmin_scalar2delta(strseries):
 
 
 def framebygeohash(df, geohashlist):
-    # Cut the dataset up into training set and testing set
+    """
+    Filter the frame for the desired geohash
+    """
     df_cut = pd.DataFrame(columns=df.columns)
     for ghash in geohashlist:
         this_cut = df.loc[df.geohash6 == ghash]
@@ -83,7 +85,7 @@ def framebygeohash(df, geohashlist):
 
 def standard_frame(frame):
     """
-    Base operations
+    Base frame operations
     """
     # Timedelta at hour and minute precision
     hrmin_delta = []
@@ -103,23 +105,33 @@ def derived_frame(frame):
     """
     Create derived columns
     """
+    # Populate time buckets with zero demand
     frame = frame.resample('15T').mean()
     frame.demand.fillna(0, inplace=True)
+    # Day column needed to generate label and demand sequences
     frame['day'] = frame.index.dayofyear
-    frame['dmd_label'] = [''.join(['D', str(x//0.1)]) for x in frame.demand]
+    # frame['dmd_label'] = [''.join(['D', str(x//0.1)]) for x in frame.demand]
+    # First label dimension: Demand is considered high (H) if it is above the median value and low (L), otherwise
     frame['dmd_label'] = ['H' if x >= frame.demand.median() else 'L' for x in frame.demand]
+    # Second label dimension: The ordinal value of a time bucket (T=15) starting from 12:00am
     frame['timex'] = frame.index.time
     frame['time_rank'] = frame.timex.rank(method='dense')
+    # The label with the two dimensions combined
     frame['label'] = [''.join(['T', str(x), y]) for x, y in zip(frame.time_rank, frame.dmd_label)]
-    frame.drop(['dmd_label', 'timex', 'time_rank'], axis=1, inplace=True)
+    # Tweak to allow HMM to do a one forward bucket prediction
+    # For training, the emitted value is taken to be the value of the next bucket
     frame['rdemand'] = [str(round(x, 2)) for x in frame.demand]
     frame['forward_label'] = frame.label.shift(-1)
+    # Drop unneeded columns
+    frame.drop(['dmd_label', 'timex', 'time_rank'], axis=1, inplace=True)
 
     return frame
 
 
 if __name__ == '__main__':
+    # Load the default training set if no filenames are supplied
     df = load_trainset()
+    # Run data validation on the frame
     errors = validate_frame(df)
 
     if errors:
@@ -134,7 +146,7 @@ if __name__ == '__main__':
     # Convert scalar day-time values to datetime objects
     df = standard_frame(df)
 
-    # Split into training and testing sets
+    # Perform the analysis geohash by geohash
     for geo in geofilter:
         df_geo = df.loc[df.geohash6 == geo]
         df_geo = derived_frame(df_geo)
