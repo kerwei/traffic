@@ -15,8 +15,10 @@ import pdb
 ROOTDIR = os.getcwd()
 DATADIR = os.path.join(ROOTDIR, 'data')
 filename = 'training.csv'
+predict_fname = 'predict.csv'
 
-def load_trainset(filename='training.csv'):
+
+def load_dataset(filename='training.csv'):
     df = pd.read_csv(os.path.join(DATADIR, filename))
 
     return df
@@ -47,7 +49,7 @@ def validate_frame(df):
     ])
 
     # pandas_schema does not currently support error summary. For validation of big datasets, this results
-    # in a big list of errors, which is not useful when printed out to the console. For now, let's just raise an warning and continue
+    # in a big list of errors, which is not useful when printed out to the console. For now, let's just raise a warning and continue
     errors = schema.validate(df)
 
     return errors
@@ -60,6 +62,8 @@ This section is aimed at creating corresponding datetime objects from the day an
 An arbritary calendar day 1-1-1900 will be selected as the base date. This can be updated later on if necessary
 """
 BASEDATE = datetime(1900, 1, 1)
+length = timedelta(minutes=15)
+timemap = {(datetime(1900,1,1,0,0,0) + i * length).time(): i for i in range(96)}
 
 def hrmin_scalar2delta(strseries):
     """
@@ -115,7 +119,7 @@ def derived_frame(frame):
     frame['dmd_label'] = ['H' if x >= frame.demand.median() else 'L' for x in frame.demand]
     # Second label dimension: The ordinal value of a time bucket (T=15) starting from 12:00am
     frame['timex'] = frame.index.time
-    frame['time_rank'] = frame.timex.rank(method='dense')
+    frame['time_rank'] = frame.timex.map(timemap)
     # The label with the two dimensions combined
     frame['label'] = [''.join(['T', str(x), y]) for x, y in zip(frame.time_rank, frame.dmd_label)]
     # Tweak to allow HMM to do a one forward bucket prediction
@@ -128,21 +132,45 @@ def derived_frame(frame):
     return frame
 
 
+def extract():
+    """
+    Utility function to generate a mock dataset to be predicted
+    """
+    import random
+
+    df = load_dataset()
+    df = standard_frame(df)
+    filename = 'data/predict.csv'
+
+    geofilter = []
+    for i in range(5):
+        geofilter.append(random.choice(df.geohash6.unique()))
+
+    filtered = df.loc[(df.geohash6 == geofilter[0]) & (df.index.dayofyear == 55) & (time(7, 0, 0) < df.index.time) & (df.index.time < time(9, 0, 0))]
+    for g in geofilter[1:]:
+        cut = df.loc[(df.geohash6 == g) & (df.index.dayofyear == 55) & (time(7, 0, 0) < df.index.time) & (df.index.time < time(9, 0, 0))]
+        filtered = pd.concat([filtered, cut])
+
+    filtered.to_csv(filename)
+        
+
 if __name__ == '__main__':
+    # extract()
     # Load the default training set if no filenames are supplied
-    df = load_trainset()
+    df = load_dataset()
     # Run data validation on the frame
     errors = validate_frame(df)
 
     if errors:
         warnings.warn("Data loaded with some inconsistencies. Resulting dataframe may not be accurate.")
 
-    # All geohashes
-    geohash = [x for x in df.geohash6]
-    # Filter for desired geohashes
-    geofilter = geohash[:10]
-    df = framebygeohash(df, geofilter)
+    # Load dataset to be predicted
+    pset = load_dataset(predict_fname)
+    geofilter = list(set([x for x in pset.geohash6]))
+    pset = standard_frame(pset)
 
+    # Only filter the relevant geohashes for training
+    df = framebygeohash(df, geofilter)
     # Convert scalar day-time values to datetime objects
     df = standard_frame(df)
 
@@ -151,26 +179,37 @@ if __name__ == '__main__':
         df_geo = df.loc[df.geohash6 == geo]
         df_geo = derived_frame(df_geo)
         demand_label = list(df_geo.label.unique())
-        test_split = (df_geo.day.max() // 5) * 4
 
-        df_train = df_geo.loc[df_geo.day <= test_split, ['label', 'rdemand', 'forward_label']]
-        df_test = df_geo.loc[df_geo.day > test_split, ['label', 'rdemand', 'forward_label']]
-
-        # Testing set
-        test = df_test.loc[(df_test.index.day == 1) & (time(9, 0, 0) < df_test.index.time) & (df_test.index.time < time(12, 0, 0)), 'label']
-        actual = df_test.loc[(df_test.index.day == 1) & (time(9, 0, 0) < df_test.index.time) & (df_test.index.time < time(12, 0, 0)), 'rdemand']
-
-        # Train the model
-        label_train = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['label']]
-        rdemand_train = [list(x[1]) for x in df_train.groupby(df_train.index.dayofyear)['rdemand']]
+        # Train the emission model
+        label_train = [list(x[1]) for x in df_geo.groupby(df_geo.index.dayofyear)['label']]
+        rdemand_train = [list(x[1]) for x in df_geo.groupby(df_geo.index.dayofyear)['rdemand']]
         em_model = emission.bake_model(label_train, rdemand_train)
+
+        # Train the transmission model for T+5 periods ahead
+        label_train = [list(x[1]) for x in df_geo.groupby(df_geo.index.dayofyear)['label']]
+        forward_train = [list(x[1]) for x in df_geo.groupby(df_geo.index.dayofyear)['forward_label']]
+        # Manual fix for the last index due to 1 bucket shift
+        label_train[-1] = label_train[-1][:-1]
+        forward_train[-1] = forward_train[-1][:-1]
+        forward_model = emission.bake_model(label_train, forward_train)
+
+        # Generate the transmission for the forward periods
+        pset_geo = pset.loc[pset.geohash6 == geo]
+        pset_geo = derived_frame(pset_geo)
+        pset_labels = pset_geo.label.to_list()
+        for i in range(5):
+            res = utils.simplify_decoding(pset_labels, forward_model, demand_label)
+            pset_labels.append(res[-1])
+        
+        # Prediction for the next T+5 (15-min buckets)
+        pperiod = [(pd.to_datetime(pset_geo.iloc[-1].name) + i * timedelta(minutes=15)).time() for i in range(1,6)]
+        plabels = pset_labels[-5:]
 
         print("Geohash: {}\n".format(geo))
         print("Actual label:\n--------------")
-        print(test)
+        print(pset_geo)
+        print("Predicted transition:\n-----------------")
+        print([(x,y) for x,y in zip(pperiod, plabels)])
         print("Predicted demand:\n-----------------")
-        print(utils.simplify_decoding(test, em_model, demand_label))
-        print()
-        print("Actual demand:\n--------------")
-        print(actual)
+        print(utils.simplify_decoding(plabels, em_model, demand_label))
         print("\n")
