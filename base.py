@@ -151,11 +151,12 @@ def extract():
         cut = df.loc[(df.geohash6 == g) & (df.index.dayofyear == 55) & (time(7, 0, 0) < df.index.time) & (df.index.time < time(9, 0, 0))]
         filtered = pd.concat([filtered, cut])
 
+    filtered.reset_index(inplace=True)
+    filtered.demand = np.nan
     filtered.to_csv(filename)
         
 
 if __name__ == '__main__':
-    # extract()
     # Load the default training set if no filenames are supplied
     df = load_dataset()
     # Run data validation on the frame

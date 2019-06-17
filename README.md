@@ -17,7 +17,13 @@ day | sequential order of days
 timestsamp | start time of 15-minute intervals, in the following format: <hour>:<minute>, where hour ranges from 0 to 23 and minute is either one of (0, 15, 30, 45)
 demand | aggregated demand normalised to be in the range [0,1]
 
-## Initial Thoughts
-1. Convert day + timestamp to datetime objects
-2. Align the beginning of training set days to actual days on the calendar to identify weekends and public holidays
-3. _NOTE_ Aggregated data is normalized across all geohash islandwide, in buckets of 15 minutes. Therefore, a value of 1.0 does not correspond to the same scalar value between 2 time buckets
+## Implementation
+The Hidden Markov Model, more commonly used for the part of speech tagging will be adapted for use in this project. The model is trained to recognized a time-demand level combination as a 'tag' and its corresponding demand at that point of time is considered to be the emitted, observable outcome. Given that the geography is also a big factor in predicting demands, the geohashes are mutually exclusive and therefore, for each of prediction needed to be made at a particular geohash, we will require the model to be trained on its historical data beforehand.
+
+## Instructions
+1. Save the training dataset as 'training.csv' inside the data folder `data/`
+2. Save the set of data where predictions need to be made on as 'predict.csv' within the same data folder `data/`. The following columns should be present in order for a prediction to be made:
+    a. geohash6
+    b. day
+    c. timestamp
+3. Execute `python base.py` from the root directory on the console and the output will be printed to the console.
