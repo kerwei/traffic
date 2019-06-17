@@ -17,8 +17,10 @@ day | sequential order of days
 timestsamp | start time of 15-minute intervals, in the following format: <hour>:<minute>, where hour ranges from 0 to 23 and minute is either one of (0, 15, 30, 45)
 demand | aggregated demand normalised to be in the range [0,1]
 
-## Implementation
-The Hidden Markov Model, more commonly used for the part of speech tagging will be adapted for use in this project. The model is trained to recognized a time-demand level combination as a 'tag' and its corresponding demand at that point of time is considered to be the emitted, observable outcome. Given that the geography is also a big factor in predicting demands, the geohashes are mutually exclusive and therefore, for each of prediction needed to be made at a particular geohash, we will require the model to be trained on its historical data beforehand.
+## Methodology
+The Hidden Markov Model (HMM), more commonly used for the part of speech tagging will be adapted for use in this project. For this project, the demand level at each time bucket for a given geohash is labeled 'H' if it is above the median value and 'L' otherwise. Each time bucket is also numbered from 12:00, T0.0 to 23:45 T95.0. Together with the label for the level of demand, a combination label (tags) is constructed such as 'T55.0L'.
+
+In part of speech tagging projects, the sequence of tags, together with their respective emission probabilities are combined to determine the likeliest tag that emits the observed word. For this project, the observed demand at each time is thought to be emitted by a combined time-demand tag. Therefore, to generate predictions for up to T + 5 periods ahead, the time-demand tags will be predicted first. Again, the HMM method is adapted to achieve this purpose by establishing that, for a given time-demand tag, the next-period time-demand tag is emitted with a calculated probability. For the training of the model, a 'forward_label' column is introduced, which is basically the combined time-demand label, shifted by 1 row. For example, for the label 'T55.0L', the next period demand level is the expected emission (either 'T56.0L' or 'T56.0H'). Once, this is performed iteratively for 5 periods ahead, the emitted time-demand tags then produce the expected demand, for each time bucket up to T+5. 
 
 ## Instructions
 1. Save the training dataset as 'training.csv' inside the data folder `data/`
