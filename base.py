@@ -116,7 +116,7 @@ def derived_frame(frame):
     frame['day'] = frame.index.dayofyear
     # frame['dmd_label'] = [''.join(['D', str(x//0.1)]) for x in frame.demand]
     # First label dimension: Demand is considered high (H) if it is above the median value and low (L), otherwise
-    frame['dmd_label'] = ['H' if x >= frame.demand.median() else 'L' for x in frame.demand]
+    frame['dmd_label'] = ['H' if x > frame.demand.median() else 'L' for x in frame.demand]
     # Second label dimension: The ordinal value of a time bucket (T=15) starting from 12:00am
     frame['timex'] = frame.index.time
     frame['time_rank'] = frame.timex.map(timemap)
@@ -152,11 +152,12 @@ def extract():
         filtered = pd.concat([filtered, cut])
 
     filtered.reset_index(inplace=True)
-    filtered.demand = np.nan
+    # filtered.demand = np.nan
     filtered.to_csv(filename)
         
 
 if __name__ == '__main__':
+    extract()
     # Load the default training set if no filenames are supplied
     df = load_dataset()
     # Run data validation on the frame
@@ -177,6 +178,7 @@ if __name__ == '__main__':
 
     # Perform the analysis geohash by geohash
     for geo in geofilter:
+        # pdb.set_trace()
         df_geo = df.loc[df.geohash6 == geo]
         df_geo = derived_frame(df_geo)
         demand_label = list(df_geo.label.unique())
@@ -202,15 +204,23 @@ if __name__ == '__main__':
             res = utils.simplify_decoding(pset_labels, forward_model, demand_label)
             pset_labels.append(res[-1])
         
+        # Extract the actual demands for the predicted period
+        df_actual = df.loc[(df.geohash6 == geo) & (df.index.dayofyear == 55) & (time(8, 45, 0) < df.index.time) & (df.index.time < time(10, 15, 0))]
+
         # Prediction for the next T+5 (15-min buckets)
         pperiod = [(pd.to_datetime(pset_geo.iloc[-1].name) + i * timedelta(minutes=15)).time() for i in range(1,6)]
         plabels = pset_labels[-5:]
 
         print("Geohash: {}\n".format(geo))
-        print("Actual label:\n--------------")
+        print("Lead predict label:\n--------------")
         print(pset_geo)
-        print("Predicted transition:\n-----------------")
+        print("\n\nPredicted transition:\n-----------------")
         print([(x,y) for x,y in zip(pperiod, plabels)])
-        print("Predicted demand:\n-----------------")
+        print("\n\nPredicted demand:\n-----------------")
         print(utils.simplify_decoding(plabels, em_model, demand_label))
+        print("\n\nActual demand:\n--------------")
+        print(df_actual)
         print("\n")
+
+        # Need to check for the accuracy of the model here.
+        # Print the actual values from the df up to T + %
