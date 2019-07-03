@@ -14,7 +14,7 @@ import pdb
 
 ROOTDIR = os.getcwd()
 DATADIR = os.path.join(ROOTDIR, 'data')
-filename = 'training.csv'
+filename = 'selected_training.csv'
 predict_fname = 'predict.csv'
 
 
