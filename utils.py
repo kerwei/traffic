@@ -1,6 +1,8 @@
 from collections import Counter
 from itertools import chain
 
+import pdb
+
 
 def pair_counts(sequences_A, sequences_B):
     """Return a dictionary keyed to each unique value in the first sequence list

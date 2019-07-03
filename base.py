@@ -146,6 +146,7 @@ def extract():
     for i in range(5):
         geofilter.append(random.choice(df.geohash6.unique()))
 
+    geofilter = ['qp03pr', 'qp03x8', 'qp098h']
     filtered = df.loc[(df.geohash6 == geofilter[0]) & (df.index.dayofyear == 55) & (time(7, 0, 0) < df.index.time) & (df.index.time < time(9, 0, 0))]
     for g in geofilter[1:]:
         cut = df.loc[(df.geohash6 == g) & (df.index.dayofyear == 55) & (time(7, 0, 0) < df.index.time) & (df.index.time < time(9, 0, 0))]
@@ -178,7 +179,6 @@ if __name__ == '__main__':
 
     # Perform the analysis geohash by geohash
     for geo in geofilter:
-        # pdb.set_trace()
         df_geo = df.loc[df.geohash6 == geo]
         df_geo = derived_frame(df_geo)
         demand_label = list(df_geo.label.unique())
@@ -186,24 +186,24 @@ if __name__ == '__main__':
         # Train the emission model
         label_train = [list(x[1]) for x in df_geo.groupby(df_geo.index.dayofyear)['label']]
         rdemand_train = [list(x[1]) for x in df_geo.groupby(df_geo.index.dayofyear)['rdemand']]
-        em_model = emission.bake_model(label_train, rdemand_train)
+        em_model = emission.bake_model(rdemand_train, label_train)
 
         # Train the transmission model for T+5 periods ahead
+        # The shifting means that the last row has no forward label
+        df_geo.drop(df_geo.loc[pd.isnull(df_geo.forward_label)].index, inplace=True)
         label_train = [list(x[1]) for x in df_geo.groupby(df_geo.index.dayofyear)['label']]
         forward_train = [list(x[1]) for x in df_geo.groupby(df_geo.index.dayofyear)['forward_label']]
-        # Manual fix for the last index due to 1 bucket shift
-        label_train[-1] = label_train[-1][:-1]
-        forward_train[-1] = forward_train[-1][:-1]
-        forward_model = emission.bake_model(label_train, forward_train)
+        forward_model = emission.bake_model(forward_train, label_train)
 
         # Generate the transmission for the forward periods
         pset_geo = pset.loc[pset.geohash6 == geo]
         pset_geo = derived_frame(pset_geo)
         pset_labels = pset_geo.label.to_list()
+
         for i in range(5):
             res = utils.simplify_decoding(pset_labels, forward_model, demand_label)
             pset_labels.append(res[-1])
-        
+
         # Extract the actual demands for the predicted period
         df_actual = df.loc[(df.geohash6 == geo) & (df.index.dayofyear == 55) & (time(8, 45, 0) < df.index.time) & (df.index.time < time(10, 15, 0))]
 
@@ -217,10 +217,23 @@ if __name__ == '__main__':
         print("\n\nPredicted transition:\n-----------------")
         print([(x,y) for x,y in zip(pperiod, plabels)])
         print("\n\nPredicted demand:\n-----------------")
-        print(utils.simplify_decoding(plabels, em_model, demand_label))
+        p_demand = utils.simplify_decoding(plabels, em_model, demand_label)
+        df_predict = pd.DataFrame({
+            'period': [str(x) for x in pperiod],
+            'demand': [float(x) for x in p_demand]})
+        print(df_predict)
         print("\n\nActual demand:\n--------------")
+        sr_period = pd.Series([str(x) for x in df_actual.index.time], name='period')
+        sr_period.index = df_actual.index
+        df_actual = df_actual.assign(period=sr_period)
+        df_actual = df_actual.loc[:,['period', 'demand']].sort_values(by='reftime')
         print(df_actual)
-        print("\n")
+        print("\n\nDeviation:\n--------------")
+        # df_actual.reset_index(inplace=True)
+        # df_actual.drop('reftime', axis=1, inplace=True)
+        df_actual.set_index('period', inplace=True)
+        df_predict.set_index('period', inplace=True)
+        df_error = df_predict.join(df_actual, on='period', lsuffix='_predict', rsuffix='_actual')
+        # df_error = df_error.assign(sq_error=lambda x: (x.demand_predict - x.demand_actual) ** 2)
+        print(df_error)
 
-        # Need to check for the accuracy of the model here.
-        # Print the actual values from the df up to T + %

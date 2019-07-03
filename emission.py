@@ -2,6 +2,8 @@ from pomegranate import State, HiddenMarkovModel, DiscreteDistribution
 from utils import *
 from itertools import chain
 
+import pdb
+
 
 def bake_model(tags_sequence, words_sequence):
     """
@@ -9,7 +11,8 @@ def bake_model(tags_sequence, words_sequence):
     Demand level are represented by 'words'
     """
     # rdemand
-    words = [x for x in chain(*words_sequence)]
+    # words = [x for x in chain(*words_sequence)]
+    words = [x for x in chain(*tags_sequence)]
     tag_unigrams = unigram_counts(words)
     tag_bigrams = bigram_counts(words)
 
@@ -23,13 +26,13 @@ def bake_model(tags_sequence, words_sequence):
     # Emission count
     label_train = tags_sequence
     rdemand_train = words_sequence
-    emission_count = pair_counts(rdemand_train, label_train)
+    emission_count = pair_counts(label_train, rdemand_train)
 
     # States with emission probability distributions P(word | tag)
     states = []
-    for rdemand, label_dict in emission_count.items() :
-        dist_tag = DiscreteDistribution({label: cn/tag_unigrams[rdemand] for label, cn in label_dict.items()})
-        states.append(State(dist_tag, name=rdemand))
+    for label, rdemand_dict in emission_count.items() :
+        dist_tag = DiscreteDistribution({rdemand: cn/tag_unigrams[label] for rdemand, cn in rdemand_dict.items()})
+        states.append(State(dist_tag, name=label))
 
     basic_model.add_states(states)
     state_names = [s.name for s in states]
